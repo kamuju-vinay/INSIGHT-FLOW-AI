@@ -76,19 +76,18 @@ app.post("/api/send-email", async (req, res) => {
   try {
     const isSecure = parseInt(smtpPort, 10) === 465;
     const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: parseInt(smtpPort, 10),
-      secure: isSecure,
-      auth: {
-        user: smtpUser,
-        pass: smtpPassword,
-      },
-      tls: {
-        // Reject unauthorized certificates in production, allow in development
-        rejectUnauthorized: process.env.NODE_ENV === "production",
-      },
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    family: 4,              // Force IPv4
+    auth: {
+      user: smtpUser,
+      pass: smtpPassword,
+    },
+    tls: {
+       rejectUnauthorized: false,
+    },
     });
-
     const logoPath = fs.existsSync(path.join(__dirname, "dist", "logo.jpg"))
       ? path.join(__dirname, "dist", "logo.jpg")
       : path.join(__dirname, "public", "logo.jpg");
