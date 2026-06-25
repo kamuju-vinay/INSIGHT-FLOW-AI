@@ -7,6 +7,7 @@ import fs from "fs";
 import dns from "dns";
 import { promisify } from "util";
 import { rateLimit } from "express-rate-limit";
+dns.setDefaultResultOrder("ipv4first");
 
 // Bypass strict SSL certificate validation for corporate/local proxies
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -75,18 +76,22 @@ app.post("/api/send-email", async (req, res) => {
 
   try {
     const isSecure = parseInt(smtpPort, 10) === 465;
-    const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false,
-    family: 4,              // Force IPv4
+    cconst transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: Number(smtpPort),
+    secure: Number(smtpPort) === 465,
+
+    family: 4,
+
     auth: {
-      user: smtpUser,
-      pass: smtpPassword,
+        user: smtpUser,
+        pass: smtpPassword,
     },
+
     tls: {
-       rejectUnauthorized: false,
+        rejectUnauthorized: false,
     },
+    });
     });
     const logoPath = fs.existsSync(path.join(__dirname, "dist", "logo.jpg"))
       ? path.join(__dirname, "dist", "logo.jpg")
@@ -111,12 +116,19 @@ app.post("/api/send-email", async (req, res) => {
       html,
       attachments
     };
+   await transporter.verify();
+
+    console.log("SMTP Connected Successfully");
 
     const info = await transporter.sendMail(mailOptions);
     console.log(`Email successfully sent to ${to}: ${info.messageId}`);
     res.status(200).json({ success: true, messageId: info.messageId });
   } catch (error) {
-    console.error("Nodemailer Send Error:", error);
+    console.error("SMTP ERROR");
+    console.error(error);
+    console.error("Code:", error.code);
+    console.error("Command:", error.command);
+    console.error("Response:", error.response);
     res.status(500).json({ error: error.message || "Failed to send email via SMTP." });
   }
 });
