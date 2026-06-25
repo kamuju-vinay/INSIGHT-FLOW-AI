@@ -72,16 +72,61 @@ app.post("/api/send-email", async (req, res) => {
     return res.status(400).json({ error: "Missing required SMTP credentials or email contents." });
   }
 
+  const logoPath = fs.existsSync(path.join(__dirname, "dist", "logo.jpg"))
+    ? path.join(__dirname, "dist", "logo.jpg")
+    : path.join(__dirname, "public", "logo.jpg");
+
+  // --- Attempt 1: Resend HTTP API ---------------------------------------
+  // Many hosts (Railway, Render, free tiers, etc.) block or silently drop
+  // outbound SMTP ports (587/465) for anti-spam reasons, causing the
+  // "Connection timeout" you saw, even though the credentials are fine.
+  // Resend sends over normal HTTPS (port 443), which is never blocked
+  // since it's the same port your whole app already uses. If RESEND_API_KEY
+  // is set as an env var, we use it as the primary path and only fall back
+  // to raw SMTP if it's not configured.
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const fromAddress = senderEmail || smtpUser;
+      const resendRes = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+        },
+        body: JSON.stringify({
+          from: `${senderName || "Insight Flow AI"} <${fromAddress}>`,
+          to: [to],
+          subject,
+          html,
+        }),
+      });
+
+      const resendData = await resendRes.json();
+
+      if (!resendRes.ok) {
+        console.error("[Email Proxy] Resend API error:", resendData);
+        // fall through to SMTP attempt below instead of returning immediately
+      } else {
+        console.log(`[Email Proxy] Email sent via Resend to ${to}: ${resendData.id}`);
+        return res.status(200).json({ success: true, messageId: resendData.id, via: "resend" });
+      }
+    } catch (resendErr) {
+      console.error("[Email Proxy] Resend request failed:", resendErr);
+      // fall through to SMTP attempt below
+    }
+  }
+
+  // --- Attempt 2: Raw SMTP (Nodemailer) ----------------------------------
   try {
     const port = parseInt(smtpPort, 10);
     const isSecure = port === 465;
 
-    // Explicitly resolve to an IPv4 address. On Railway, the default DNS
-    // resolver can still hand back an IPv6 address (e.g. for smtp.gmail.com)
-    // even when family:4 is set on the transport, causing ENETUNREACH since
-    // Railway's network can't route IPv6 egress to Gmail. Resolving manually
-    // guarantees we connect over IPv4, while keeping the original hostname
-    // for the TLS handshake (via servername/name) so cert validation matches.
+    // Explicitly resolve to an IPv4 address. Some hosts' default DNS
+    // resolver hands back an IPv6 address (e.g. for smtp.gmail.com) even
+    // when family:4 is set on the transport, causing ENETUNREACH. Resolving
+    // manually guarantees we connect over IPv4, while keeping the original
+    // hostname for the TLS handshake (via servername/name) so cert
+    // validation still matches.
     let connectHost = smtpHost;
     try {
       const resolved = await dnsLookup(smtpHost, { family: 4 });
@@ -98,10 +143,10 @@ app.post("/api/send-email", async (req, res) => {
       port,
       secure: isSecure,
       family: 4,
-      name: smtpHost,           // used in EHLO/HELO
+      name: smtpHost,
       tls: {
         rejectUnauthorized: false,
-        servername: smtpHost,   // required so TLS SNI/cert check matches the real hostname, not the raw IP
+        servername: smtpHost,
       },
       auth: {
         user: smtpUser,
@@ -111,10 +156,6 @@ app.post("/api/send-email", async (req, res) => {
       greetingTimeout: 10000,
       socketTimeout: 15000,
     });
-
-    const logoPath = fs.existsSync(path.join(__dirname, "dist", "logo.jpg"))
-      ? path.join(__dirname, "dist", "logo.jpg")
-      : path.join(__dirname, "public", "logo.jpg");
 
     const attachments = [];
     if (fs.existsSync(logoPath)) {
@@ -139,10 +180,16 @@ app.post("/api/send-email", async (req, res) => {
 
     const info = await transporter.sendMail(mailOptions);
     console.log(`Email successfully sent to ${to}: ${info.messageId}`);
-    res.status(200).json({ success: true, messageId: info.messageId });
+    res.status(200).json({ success: true, messageId: info.messageId, via: "smtp" });
   } catch (error) {
     console.error("Nodemailer Send Error:", error);
-    res.status(500).json({ error: error.message || "Failed to send email via SMTP." });
+    const isTimeout = /timeout|ETIMEDOUT|ENETUNREACH|ECONNREFUSED/i.test(error.message || "");
+    res.status(500).json({
+      error: error.message || "Failed to send email via SMTP.",
+      hint: isTimeout
+        ? "This looks like your host is blocking outbound SMTP ports (587/465). Set a RESEND_API_KEY env var to send via HTTPS instead, which bypasses this entirely."
+        : undefined,
+    });
   }
 });
 
