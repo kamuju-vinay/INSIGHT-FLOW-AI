@@ -17,34 +17,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// Scope CORS origin to localhost and Vercel subdomains
-const allowedOrigins = [
-    "https://your-app.up.railway.app",
-    "http://localhost:5173"
-];
-if (process.env.ALLOWED_ORIGIN) {
-  allowedOrigins.push(process.env.ALLOWED_ORIGIN);
-}
-
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. server-to-server or mobile apps)
-    if (!origin) return callback(null, true);
-    
-    const isAllowed = allowedOrigins.some((allowed) => {
-      if (allowed.includes("*")) {
-        const regex = new RegExp("^" + allowed.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$");
-        return regex.test(origin);
-      }
-      return allowed === origin;
-    });
-
-    if (isAllowed || origin.endsWith(".vercel.app")) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
+  origin: true,
   credentials: true
 }));
 
