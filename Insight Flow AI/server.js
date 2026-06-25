@@ -76,17 +76,36 @@ app.post("/api/send-email", async (req, res) => {
     const port = parseInt(smtpPort, 10);
     const isSecure = port === 465;
 
+    // Explicitly resolve to an IPv4 address. On Railway, the default DNS
+    // resolver can still hand back an IPv6 address (e.g. for smtp.gmail.com)
+    // even when family:4 is set on the transport, causing ENETUNREACH since
+    // Railway's network can't route IPv6 egress to Gmail. Resolving manually
+    // guarantees we connect over IPv4, while keeping the original hostname
+    // for the TLS handshake (via servername/name) so cert validation matches.
+    let connectHost = smtpHost;
+    try {
+      const resolved = await dnsLookup(smtpHost, { family: 4 });
+      if (resolved?.address) {
+        connectHost = resolved.address;
+        console.log(`[Email Proxy] Resolved ${smtpHost} -> IPv4 ${connectHost}`);
+      }
+    } catch (resolveErr) {
+      console.warn(`[Email Proxy] IPv4 resolution failed for ${smtpHost}, falling back to hostname:`, resolveErr.message);
+    }
+
     const transporter = nodemailer.createTransport({
-      host: smtpHost,
+      host: connectHost,
       port,
       secure: isSecure,
       family: 4,
+      name: smtpHost,           // used in EHLO/HELO
+      tls: {
+        rejectUnauthorized: false,
+        servername: smtpHost,   // required so TLS SNI/cert check matches the real hostname, not the raw IP
+      },
       auth: {
         user: smtpUser,
         pass: smtpPassword,
-      },
-      tls: {
-        rejectUnauthorized: false,
       },
       connectionTimeout: 10000,
       greetingTimeout: 10000,
