@@ -7,7 +7,6 @@ import fs from "fs";
 import dns from "dns";
 import { promisify } from "util";
 import { rateLimit } from "express-rate-limit";
-dns.setDefaultResultOrder("ipv4first");
 
 // Bypass strict SSL certificate validation for corporate/local proxies
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -27,24 +26,24 @@ app.use(express.json({ limit: "10mb" })); // support large HTML payloads for art
 
 // Rate Limiters
 const generalApiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 API calls per 15 minutes
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
 });
 
 const emailLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 15, // Limit each IP to 15 email sends per 15 minutes
+  windowMs: 15 * 60 * 1000,
+  max: 15,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Email rate limit exceeded. Please try again in a few minutes." },
 });
 
 const crawlerLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 2000, // Limit each IP to 2000 fetches per 15 minutes
+  windowMs: 15 * 60 * 1000,
+  max: 2000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Crawler fetch limit exceeded. Please try again later." },
@@ -54,7 +53,6 @@ app.use("/api/send-email", emailLimiter);
 app.use("/api/call-ai", generalApiLimiter);
 app.use("/api/fetch-url", crawlerLimiter);
 
-// Serve static assets from the Vite build directory
 app.use(express.static(path.join(__dirname, "dist")));
 
 app.post("/api/send-email", async (req, res) => {
@@ -75,27 +73,30 @@ app.post("/api/send-email", async (req, res) => {
   }
 
   try {
-    const isSecure = parseInt(smtpPort, 10) === 465;
-    cconst transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: Number(smtpPort),
-    secure: Number(smtpPort) === 465,
+    const port = parseInt(smtpPort, 10);
+    const isSecure = port === 465;
 
-    family: 4,
-
-    auth: {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port,
+      secure: isSecure,
+      family: 4,
+      auth: {
         user: smtpUser,
         pass: smtpPassword,
-    },
-
-    tls: {
+      },
+      tls: {
         rejectUnauthorized: false,
-    },
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     });
-    });
+
     const logoPath = fs.existsSync(path.join(__dirname, "dist", "logo.jpg"))
       ? path.join(__dirname, "dist", "logo.jpg")
       : path.join(__dirname, "public", "logo.jpg");
+
     const attachments = [];
     if (fs.existsSync(logoPath)) {
       console.log(`[Email Proxy] Logo file found at ${logoPath}. Attaching inline.`);
@@ -116,19 +117,12 @@ app.post("/api/send-email", async (req, res) => {
       html,
       attachments
     };
-   await transporter.verify();
-
-    console.log("SMTP Connected Successfully");
 
     const info = await transporter.sendMail(mailOptions);
     console.log(`Email successfully sent to ${to}: ${info.messageId}`);
     res.status(200).json({ success: true, messageId: info.messageId });
   } catch (error) {
-    console.error("SMTP ERROR");
-    console.error(error);
-    console.error("Code:", error.code);
-    console.error("Command:", error.command);
-    console.error("Response:", error.response);
+    console.error("Nodemailer Send Error:", error);
     res.status(500).json({ error: error.message || "Failed to send email via SMTP." });
   }
 });
@@ -273,9 +267,9 @@ app.post("/api/call-ai", async (req, res) => {
       return res.status(400).json({ error: "Unsupported provider." });
     }
 
-    res.status(200).json({ 
-      text: responseText, 
-      quota: { remainingRequests, remainingTokens } 
+    res.status(200).json({
+      text: responseText,
+      quota: { remainingRequests, remainingTokens }
     });
   } catch (error) {
     console.error("AI Proxy Error:", error);
@@ -311,7 +305,6 @@ app.post("/api/validate-key", async (req, res) => {
         return res.status(200).json({ success: false, errorType: isQuota ? "exhausted" : "invalid", message: errMsg });
       }
     } else if (provider === "huggingface") {
-      // Use whoami-v2 which is extremely fast and checks key validity without trigger time
       const apiRes = await fetch("https://huggingface.co/api/whoami-v2", {
         method: "GET",
         headers: {
@@ -393,9 +386,9 @@ app.post("/api/validate-key", async (req, res) => {
       return res.status(400).json({ error: "Unsupported provider." });
     }
 
-    res.status(200).json({ 
-      success: true, 
-      quota: { remainingRequests, remainingTokens } 
+    res.status(200).json({
+      success: true,
+      quota: { remainingRequests, remainingTokens }
     });
   } catch (error) {
     res.status(200).json({ success: false, errorType: "invalid", message: error.message || "Failed to validate key" });
@@ -403,7 +396,6 @@ app.post("/api/validate-key", async (req, res) => {
 });
 
 function isPrivateIP(ip) {
-  // IPv4 Loopback, Private, Link-Local
   if (
     /^(127\.|10\.|192\.168\.)/.test(ip) ||
     /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip) ||
@@ -411,7 +403,6 @@ function isPrivateIP(ip) {
   ) {
     return true;
   }
-  // IPv6 Loopback, Link-Local, Unique Local
   if (
     ip === "::1" ||
     ip.startsWith("fe80:") ||
@@ -426,27 +417,24 @@ function isPrivateIP(ip) {
 async function validateUrlForSSRF(urlStr) {
   try {
     const parsed = new URL(urlStr);
-    
-    // Only allow http and https protocols
+
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
 
     const hostname = parsed.hostname;
-    
-    // If hostname is directly an IP address
+
     if (/^[0-9.]+$/.test(hostname) || hostname.includes(":")) {
       if (isPrivateIP(hostname)) return false;
     }
 
-    // Resolve DNS to verify the target IP
     const lookupResult = await dnsLookup(hostname).catch(() => null);
     if (lookupResult && lookupResult.address) {
       if (isPrivateIP(lookupResult.address)) {
         return false;
       }
     }
-    
+
     return true;
   } catch (error) {
     return false;
@@ -460,7 +448,6 @@ app.get("/api/fetch-url", async (req, res) => {
   }
   console.log("   [Proxy Fetch] Requesting URL:", url);
 
-  // SSRF Protection check
   const isSafe = await validateUrlForSSRF(url);
   if (!isSafe) {
     return res.status(403).json({ error: "Access to the requested URL is forbidden (SSRF protection)." });
@@ -493,7 +480,6 @@ app.post("/api/log", (req, res) => {
   res.sendStatus(200);
 });
 
-// Catch-all route to serve the Vite frontend for client-side routing
 app.get("*splat", (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
@@ -502,4 +488,3 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`SMTP Local API Server running on port ${PORT}`);
 });
-
