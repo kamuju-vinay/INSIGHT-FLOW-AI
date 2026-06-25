@@ -19,8 +19,8 @@ const app = express();
 
 // Scope CORS origin to localhost and Vercel subdomains
 const allowedOrigins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
+    process.env.FRONTEND_URL,
+    "http://localhost:5173"
 ];
 if (process.env.ALLOWED_ORIGIN) {
   allowedOrigins.push(process.env.ALLOWED_ORIGIN);
