@@ -19,7 +19,7 @@ const app = express();
 
 // Scope CORS origin to localhost and Vercel subdomains
 const allowedOrigins = [
-    process.env.FRONTEND_URL,
+    https://your-app.up.railway.app,
     "http://localhost:5173"
 ];
 if (process.env.ALLOWED_ORIGIN) {
