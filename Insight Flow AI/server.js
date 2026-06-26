@@ -7,6 +7,8 @@ import fs from "fs";
 import dns from "dns";
 import { promisify } from "util";
 import { rateLimit } from "express-rate-limit";
+const LogoImg = "/logo.jpg";          // App.jsx
+const logoSrc = ... `${window.location.origin}/logo.jpg`;  // email template (already fixed)
 
 // Bypass strict SSL certificate validation for corporate/local proxies
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
