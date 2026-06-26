@@ -598,4 +598,5 @@ app.get("*splat", (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`SMTP Local API Server running on port ${PORT}`);
+  console.log(`[Startup Check] RESEND_API_KEY present: ${process.env.RESEND_API_KEY ? "YES (" + process.env.RESEND_API_KEY.slice(0, 8) + "...)" : "NO — not set in this environment"}`);
 });
