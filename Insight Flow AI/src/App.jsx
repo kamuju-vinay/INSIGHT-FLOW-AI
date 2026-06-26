@@ -538,7 +538,7 @@ function compileEmailHtml(plan, articles, isPreview = false) {
     year: "numeric"
   });
 
-  const logoSrc = isPreview ? LogoImg : "cid:logo";
+ const logoSrc = isPreview ? LogoImg : `${window.location.origin}/logo.jpg`;
 
   // 1. Build Articles List (Single column layout)
   let articlesListHtml = "";
