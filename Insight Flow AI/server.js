@@ -17,8 +17,34 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Scope CORS origin to localhost and Vercel subdomains
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+];
+if (process.env.ALLOWED_ORIGIN) {
+  allowedOrigins.push(process.env.ALLOWED_ORIGIN);
+}
+
 app.use(cors({
-  origin: true,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. server-to-server or mobile apps)
+    if (!origin) return callback(null, true);
+    
+    const isAllowed = allowedOrigins.some((allowed) => {
+      if (allowed.includes("*")) {
+        const regex = new RegExp("^" + allowed.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$");
+        return regex.test(origin);
+      }
+      return allowed === origin;
+    });
+
+    if (isAllowed || origin.endsWith(".vercel.app")) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   credentials: true
 }));
 
@@ -26,24 +52,24 @@ app.use(express.json({ limit: "10mb" })); // support large HTML payloads for art
 
 // Rate Limiters
 const generalApiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 API calls per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
 });
 
 const emailLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 15,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 15, // Limit each IP to 15 email sends per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Email rate limit exceeded. Please try again in a few minutes." },
 });
 
 const crawlerLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 2000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 2000, // Limit each IP to 2000 fetches per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Crawler fetch limit exceeded. Please try again later." },
@@ -53,6 +79,7 @@ app.use("/api/send-email", emailLimiter);
 app.use("/api/call-ai", generalApiLimiter);
 app.use("/api/fetch-url", crawlerLimiter);
 
+// Serve static assets from the Vite build directory
 app.use(express.static(path.join(__dirname, "dist")));
 
 app.post("/api/send-email", async (req, res) => {
@@ -77,13 +104,11 @@ app.post("/api/send-email", async (req, res) => {
     : path.join(__dirname, "public", "logo.jpg");
 
   // --- Attempt 1: Resend HTTP API ---------------------------------------
-  // Many hosts (Railway, Render, free tiers, etc.) block or silently drop
-  // outbound SMTP ports (587/465) for anti-spam reasons, causing the
-  // "Connection timeout" you saw, even though the credentials are fine.
-  // Resend sends over normal HTTPS (port 443), which is never blocked
-  // since it's the same port your whole app already uses. If RESEND_API_KEY
-  // is set as an env var, we use it as the primary path and only fall back
-  // to raw SMTP if it's not configured.
+  // Many hosts (Railway, Render, free tiers, etc.) block outbound SMTP
+  // ports (587/465) for anti-spam reasons, causing "Connection timeout"
+  // even with valid credentials. Resend sends over HTTPS (port 443),
+  // which is never blocked. If RESEND_API_KEY is set, use it as the
+  // primary path and only fall back to raw SMTP if it's not configured.
   if (process.env.RESEND_API_KEY) {
     try {
       const fromAddress = senderEmail || smtpUser;
@@ -114,6 +139,8 @@ app.post("/api/send-email", async (req, res) => {
       console.error("[Email Proxy] Resend request failed:", resendErr);
       // fall through to SMTP attempt below
     }
+  } else {
+    console.warn("[Email Proxy] RESEND_API_KEY not set — falling back to raw SMTP (may time out on this host).");
   }
 
   // --- Attempt 2: Raw SMTP (Nodemailer) ----------------------------------
@@ -121,12 +148,9 @@ app.post("/api/send-email", async (req, res) => {
     const port = parseInt(smtpPort, 10);
     const isSecure = port === 465;
 
-    // Explicitly resolve to an IPv4 address. Some hosts' default DNS
-    // resolver hands back an IPv6 address (e.g. for smtp.gmail.com) even
-    // when family:4 is set on the transport, causing ENETUNREACH. Resolving
-    // manually guarantees we connect over IPv4, while keeping the original
-    // hostname for the TLS handshake (via servername/name) so cert
-    // validation still matches.
+    // Resolve to an IPv4 address explicitly — some hosts' DNS resolver
+    // hands back an IPv6 address even when family:4 is set, causing
+    // ENETUNREACH. Keep the original hostname for TLS via servername/name.
     let connectHost = smtpHost;
     try {
       const resolved = await dnsLookup(smtpHost, { family: 4 });
@@ -145,7 +169,7 @@ app.post("/api/send-email", async (req, res) => {
       family: 4,
       name: smtpHost,
       tls: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: process.env.NODE_ENV === "production",
         servername: smtpHost,
       },
       auth: {
@@ -187,7 +211,7 @@ app.post("/api/send-email", async (req, res) => {
     res.status(500).json({
       error: error.message || "Failed to send email via SMTP.",
       hint: isTimeout
-        ? "This looks like your host is blocking outbound SMTP ports (587/465). Set a RESEND_API_KEY env var to send via HTTPS instead, which bypasses this entirely."
+        ? "Your host is likely blocking outbound SMTP ports (587/465). Set RESEND_API_KEY env var to send via HTTPS instead."
         : undefined,
     });
   }
@@ -333,9 +357,9 @@ app.post("/api/call-ai", async (req, res) => {
       return res.status(400).json({ error: "Unsupported provider." });
     }
 
-    res.status(200).json({
-      text: responseText,
-      quota: { remainingRequests, remainingTokens }
+    res.status(200).json({ 
+      text: responseText, 
+      quota: { remainingRequests, remainingTokens } 
     });
   } catch (error) {
     console.error("AI Proxy Error:", error);
@@ -371,6 +395,7 @@ app.post("/api/validate-key", async (req, res) => {
         return res.status(200).json({ success: false, errorType: isQuota ? "exhausted" : "invalid", message: errMsg });
       }
     } else if (provider === "huggingface") {
+      // Use whoami-v2 which is extremely fast and checks key validity without trigger time
       const apiRes = await fetch("https://huggingface.co/api/whoami-v2", {
         method: "GET",
         headers: {
@@ -452,9 +477,9 @@ app.post("/api/validate-key", async (req, res) => {
       return res.status(400).json({ error: "Unsupported provider." });
     }
 
-    res.status(200).json({
-      success: true,
-      quota: { remainingRequests, remainingTokens }
+    res.status(200).json({ 
+      success: true, 
+      quota: { remainingRequests, remainingTokens } 
     });
   } catch (error) {
     res.status(200).json({ success: false, errorType: "invalid", message: error.message || "Failed to validate key" });
@@ -462,6 +487,7 @@ app.post("/api/validate-key", async (req, res) => {
 });
 
 function isPrivateIP(ip) {
+  // IPv4 Loopback, Private, Link-Local
   if (
     /^(127\.|10\.|192\.168\.)/.test(ip) ||
     /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip) ||
@@ -469,6 +495,7 @@ function isPrivateIP(ip) {
   ) {
     return true;
   }
+  // IPv6 Loopback, Link-Local, Unique Local
   if (
     ip === "::1" ||
     ip.startsWith("fe80:") ||
@@ -483,24 +510,27 @@ function isPrivateIP(ip) {
 async function validateUrlForSSRF(urlStr) {
   try {
     const parsed = new URL(urlStr);
-
+    
+    // Only allow http and https protocols
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
 
     const hostname = parsed.hostname;
-
+    
+    // If hostname is directly an IP address
     if (/^[0-9.]+$/.test(hostname) || hostname.includes(":")) {
       if (isPrivateIP(hostname)) return false;
     }
 
+    // Resolve DNS to verify the target IP
     const lookupResult = await dnsLookup(hostname).catch(() => null);
     if (lookupResult && lookupResult.address) {
       if (isPrivateIP(lookupResult.address)) {
         return false;
       }
     }
-
+    
     return true;
   } catch (error) {
     return false;
@@ -514,6 +544,7 @@ app.get("/api/fetch-url", async (req, res) => {
   }
   console.log("   [Proxy Fetch] Requesting URL:", url);
 
+  // SSRF Protection check
   const isSafe = await validateUrlForSSRF(url);
   if (!isSafe) {
     return res.status(403).json({ error: "Access to the requested URL is forbidden (SSRF protection)." });
@@ -546,6 +577,7 @@ app.post("/api/log", (req, res) => {
   res.sendStatus(200);
 });
 
+// Catch-all route to serve the Vite frontend for client-side routing
 app.get("*splat", (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
