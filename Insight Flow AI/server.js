@@ -9,7 +9,7 @@ import { promisify } from "util";
 import { rateLimit } from "express-rate-limit";
 
 // Bypass strict SSL certificate validation for corporate/local proxies
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; 
 
 const dnsLookup = promisify(dns.lookup);
 const __filename = fileURLToPath(import.meta.url);
