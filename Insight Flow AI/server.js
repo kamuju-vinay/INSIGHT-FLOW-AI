@@ -17,6 +17,13 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Railway (and most PaaS) sit behind a reverse proxy and set X-Forwarded-For.
+// Without trusting the proxy, express-rate-limit throws
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR since it can't safely determine the
+// real client IP. `1` trusts exactly one hop (the platform's proxy), which
+// is correct for Railway's setup.
+app.set("trust proxy", 1);
+
 // Scope CORS origin to localhost, Vercel subdomains, and Railway subdomains.
 // Using only a fixed env var here is fragile — Railway can assign/rotate
 // public domains (e.g. *.up.railway.app) across redeploys or environments,
